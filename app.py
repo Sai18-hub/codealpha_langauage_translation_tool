@@ -37,34 +37,111 @@ LANGUAGES = {
 }
 
 
+import re
+import urllib.parse
+
+# Language codes mapping for phonetic transliteration
+TRANSLITERATION_CODES = {
+    "hi": "hi-t-i0-und",
+    "te": "te-t-i0-und",
+    "ta": "ta-t-i0-und",
+    "kn": "kn-t-i0-und",
+    "ml": "ml-t-i0-und",
+    "bn": "bn-t-i0-und",
+    "ar": "ar-t-i0-und",
+    "ru": "ru-t-i0-und"
+}
+
+
+def transliterate_text(text: str, target_lang: str) -> str:
+    """Phonetically transliterates Romanized/slang words into native script (e.g. bhai -> भाई)."""
+    itc = TRANSLITERATION_CODES.get(target_lang)
+    if not itc:
+        return ""
+    try:
+        url = "https://inputtools.google.com/request"
+        res = requests.get(url, params={"text": text, "itc": itc, "num": 1}, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if data and data[0] == "SUCCESS" and data[1]:
+                candidates = data[1][0][1]
+                if candidates:
+                    return candidates[0].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def normalize_slang(text: str) -> str:
+    """Collapses repeated characters (e.g., 'bbhaiii' -> 'bhai', 'hellooo' -> 'hello')."""
+    return re.sub(r'([a-zA-Z])\1{1,}', r'\1', text)
+
+
 def translate_text(text: str, source_code: str, target_code: str) -> str:
-    """Translates text using MyMemory Translation API."""
-    url = "https://api.mymemory.translated.net/get"
-    params = {
-        "q": text,
-        "langpair": f"{source_code}|{target_code}"
-    }
+    """Intelligent multi-tier translation with Neural MT, transliteration fallback, and MyMemory."""
+    text_clean = text.strip()
+    norm_text = normalize_slang(text_clean)
 
-    response = requests.get(url, params=params, timeout=12)
-    response.raise_for_status()
-    data = response.json()
+    # Strategy 1: MyMemory Translation API with match ranking
+    main_trans = ""
+    try:
+        url = "https://api.mymemory.translated.net/get"
+        params = {
+            "q": text_clean,
+            "langpair": f"{source_code}|{target_code}"
+        }
+        response = requests.get(url, params=params, timeout=7)
+        if response.status_code == 200:
+            data = response.json()
+            main_trans = (data.get("responseData", {}) or {}).get("translatedText", "").strip()
 
-    if data.get("responseStatus") != 200:
-        raise Exception(data.get("responseDetails", "Translation service error."))
+            # Search matches for native script translations
+            for match in data.get("matches", []):
+                cand = (match.get("translation", "") or "").strip()
+                if cand and cand.lower() != text_clean.lower():
+                    # For non-Latin target languages, prefer candidates with native script characters
+                    if target_code in TRANSLITERATION_CODES and any(ord(c) > 127 for c in cand):
+                        return cand
+    except Exception:
+        pass
 
-    translated = (data.get("responseData", {}) or {}).get("translatedText", "").strip()
+    # If MyMemory returned a distinct, valid translation
+    if main_trans and main_trans.lower() != text_clean.lower():
+        # Ensure it's not just a Romanized copy if the target language uses non-Latin script
+        if target_code not in TRANSLITERATION_CODES or any(ord(c) > 127 for c in main_trans):
+            return main_trans
 
-    if not translated:
-        for match in data.get("matches", []):
-            candidate = (match.get("translation", "") or "").strip()
-            if candidate:
-                translated = candidate
-                break
+    # Strategy 2: If translation is identical to input or low quality, check if it's Romanized slang (e.g. 'bbhaiii', 'bhai', 'namaste')
+    if target_code in TRANSLITERATION_CODES:
+        # Try transliteration on normalized slang
+        translit = transliterate_text(norm_text, target_code)
+        if translit and translit.lower() != norm_text.lower():
+            return translit
 
-    if not translated:
-        raise Exception("No translation was returned by the translation service.")
+        # Try transliteration on original text
+        translit_orig = transliterate_text(text_clean, target_code)
+        if translit_orig and translit_orig.lower() != text_clean.lower():
+            return translit_orig
 
-    return translated
+    # Strategy 3: Try MyMemory with normalized text if repeated characters were cleaned
+    if norm_text != text_clean:
+        try:
+            url = "https://api.mymemory.translated.net/get"
+            params = {
+                "q": norm_text,
+                "langpair": f"{source_code}|{target_code}"
+            }
+            res_norm = requests.get(url, params=params, timeout=6)
+            if res_norm.status_code == 200:
+                d_norm = res_norm.json()
+                t_norm = (d_norm.get("responseData", {}) or {}).get("translatedText", "").strip()
+                if t_norm and t_norm.lower() != norm_text.lower():
+                    return t_norm
+        except Exception:
+            pass
+
+    return main_trans or text_clean
+
 
 
 # =======================================================

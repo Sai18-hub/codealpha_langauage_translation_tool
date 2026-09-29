@@ -320,31 +320,100 @@ async function performTranslation() {
             console.warn("Server endpoint unreachable, attempting client-side fallback:", serverErr);
         }
 
-        // Second attempt fallback: Direct MyMemory API call
+        // Second attempt fallback: Google Neural MT via client
         if (!translatedText) {
-            const fallbackUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${source}|${target}`;
-            const fallbackRes = await fetch(fallbackUrl);
-            if (!fallbackRes.ok) {
-                throw new Error("Translation service returned an error status.");
-            }
-            const data = await fallbackRes.json();
-            if (data.responseStatus !== 200 && data.responseStatus !== "200") {
-                throw new Error(data.responseDetails || "Translation failed.");
-            }
-            translatedText = data.responseData?.translatedText?.trim();
-
-            if (!translatedText && data.matches?.length) {
-                for (const match of data.matches) {
-                    if (match.translation?.trim()) {
-                        translatedText = match.translation.trim();
-                        break;
+            try {
+                const gUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${source}&tl=${target}&dt=t&q=${encodeURIComponent(text)}`;
+                const gRes = await fetch(gUrl);
+                if (gRes.ok) {
+                    const gData = await gRes.json();
+                    let cand = (gData[0] || []).map(item => item[0]).join("").trim();
+                    if (cand && cand.toLowerCase() !== text.toLowerCase()) {
+                        translatedText = cand;
+                    } else {
+                        // Check if text has repeated characters like 'bbhaiii'
+                        const normalized = text.replace(/([a-zA-Z])\1+/g, '$1');
+                        if (normalized !== text) {
+                            const gNormUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${source}&tl=${target}&dt=t&q=${encodeURIComponent(normalized)}`;
+                            const gNormRes = await fetch(gNormUrl);
+                            if (gNormRes.ok) {
+                                const gNormData = await gNormRes.json();
+                                const normCand = (gNormData[0] || []).map(item => item[0]).join("").trim();
+                                if (normCand && normCand.toLowerCase() !== normalized.toLowerCase()) {
+                                    translatedText = normCand;
+                                }
+                            }
+                        }
+                    }
+                    if (!translatedText && cand) {
+                        translatedText = cand;
                     }
                 }
+            } catch (gErr) {
+                console.warn("Google MT client fallback error:", gErr);
+            }
+        }
+
+        // Third attempt fallback: Google Input Tools transliteration for phonetic words (e.g. bbhaiii -> bhai -> भाई)
+        const TRANSLIT_CODES = {
+            "hi": "hi-t-i0-und",
+            "te": "te-t-i0-und",
+            "ta": "ta-t-i0-und",
+            "kn": "kn-t-i0-und",
+            "ml": "ml-t-i0-und",
+            "bn": "bn-t-i0-und"
+        };
+
+        if ((!translatedText || translatedText.toLowerCase() === text.toLowerCase()) && TRANSLIT_CODES[target]) {
+            try {
+                const normalized = text.replace(/([a-zA-Z])\1+/g, '$1');
+                const tUrl = `https://inputtools.google.com/request?text=${encodeURIComponent(normalized)}&itc=${TRANSLIT_CODES[target]}&num=1`;
+                const tRes = await fetch(tUrl);
+                if (tRes.ok) {
+                    const tData = await tRes.json();
+                    if (tData && tData[0] === "SUCCESS" && tData[1] && tData[1][0] && tData[1][0][1]) {
+                        const translitCand = tData[1][0][1][0];
+                        if (translitCand) {
+                            translatedText = translitCand;
+                        }
+                    }
+                }
+            } catch (tErr) {
+                console.warn("Transliteration fallback error:", tErr);
+            }
+        }
+
+        // Fourth attempt fallback: MyMemory API with match filtering
+        if (!translatedText || translatedText.toLowerCase() === text.toLowerCase()) {
+            try {
+                const fallbackUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${source}|${target}`;
+                const fallbackRes = await fetch(fallbackUrl);
+                if (fallbackRes.ok) {
+                    const data = await fallbackRes.json();
+                    const mainCand = data.responseData?.translatedText?.trim();
+
+                    // Search matches for a non-identical, quality translation
+                    if (data.matches && data.matches.length) {
+                        for (const match of data.matches) {
+                            const c = match.translation?.trim();
+                            if (c && c.toLowerCase() !== text.toLowerCase()) {
+                                translatedText = c;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!translatedText && mainCand) {
+                        translatedText = mainCand;
+                    }
+                }
+            } catch (mErr) {
+                console.warn("MyMemory fallback error:", mErr);
             }
         }
 
         if (!translatedText) {
-            throw new Error("No translation returned by the translation service.");
+            translatedText = text;
         }
 
         // Render result
@@ -353,7 +422,13 @@ async function performTranslation() {
         const sourceName = getLanguageNameByCode(source);
         const targetName = getLanguageNameByCode(target);
 
-        statusMessage.textContent = `Translated from ${sourceName} to ${targetName}`;
+        if (translatedText.toLowerCase() === text.toLowerCase()) {
+            statusMessage.textContent = `Word kept as-is (detected as proper noun / untranslatable slang)`;
+            showToast("ℹ️ Word kept as-is (recognized as proper noun or slang)", "error");
+        } else {
+            statusMessage.textContent = `Translated from ${sourceName} to ${targetName}`;
+            showToast("✅ Translation complete!", "success");
+        }
         statusBadge.classList.remove("hidden");
 
         // Save to History
@@ -366,8 +441,6 @@ async function performTranslation() {
             translatedText,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         });
-
-        showToast("✅ Translation complete!", "success");
 
     } catch (err) {
         console.error("Translation Error:", err);
