@@ -1,425 +1,160 @@
-import streamlit as st
+import os
+import sys
 import requests
-import streamlit.components.v1 as components
+from flask import Flask, render_template, request, jsonify
 
+# Base directory for locating templates and static files
+base_dir = os.path.abspath(os.path.dirname(__file__))
 
-# =========================================
-# PAGE CONFIGURATION
-# =========================================
-
-st.set_page_config(
-    page_title="AI Language Translator",
-    page_icon="🌍",
-    layout="centered"
+app = Flask(
+    __name__,
+    template_folder=os.path.join(base_dir, "templates"),
+    static_folder=os.path.join(base_dir, "static")
 )
 
-
-# =========================================
-# CUSTOM CSS
-# =========================================
-
-st.markdown(
-    """
-    <style>
-
-    .main-title {
-        text-align: center;
-        font-size: 40px;
-        font-weight: bold;
-        margin-bottom: 5px;
-    }
-
-    .subtitle {
-        text-align: center;
-        font-size: 18px;
-        margin-bottom: 25px;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# =========================================
-# LANGUAGE LIST
-# =========================================
-
-languages = {
-    "English": "en",
-    "Telugu": "te",
-    "Hindi": "hi",
-    "Tamil": "ta",
-    "Kannada": "kn",
-    "Malayalam": "ml",
-    "French": "fr",
-    "German": "de",
-    "Spanish": "es",
-    "Italian": "it",
-    "Portuguese": "pt",
-    "Russian": "ru",
-    "Japanese": "ja",
-    "Chinese": "zh",
-    "Arabic": "ar"
+# Supported languages list
+LANGUAGES = {
+    "English": {"code": "en", "flag": "🇬🇧"},
+    "Telugu": {"code": "te", "flag": "🇮🇳"},
+    "Hindi": {"code": "hi", "flag": "🇮🇳"},
+    "Tamil": {"code": "ta", "flag": "🇮🇳"},
+    "Kannada": {"code": "kn", "flag": "🇮🇳"},
+    "Malayalam": {"code": "ml", "flag": "🇮🇳"},
+    "Spanish": {"code": "es", "flag": "🇪🇸"},
+    "French": {"code": "fr", "flag": "🇫🇷"},
+    "German": {"code": "de", "flag": "🇩🇪"},
+    "Italian": {"code": "it", "flag": "🇮🇹"},
+    "Portuguese": {"code": "pt", "flag": "🇵🇹"},
+    "Russian": {"code": "ru", "flag": "🇷🇺"},
+    "Japanese": {"code": "ja", "flag": "🇯🇵"},
+    "Chinese": {"code": "zh", "flag": "🇨🇳"},
+    "Arabic": {"code": "ar", "flag": "🇸🇦"},
+    "Bengali": {"code": "bn", "flag": "🇮🇳"},
+    "Korean": {"code": "ko", "flag": "🇰🇷"},
+    "Turkish": {"code": "tr", "flag": "🇹🇷"},
+    "Dutch": {"code": "nl", "flag": "🇳🇱"},
+    "Indonesian": {"code": "id", "flag": "🇮🇩"}
 }
 
 
-# =========================================
-# INITIALIZE SESSION STATE
-# =========================================
-
-if "source_language" not in st.session_state:
-    st.session_state.source_language = "English"
-
-if "target_language" not in st.session_state:
-    st.session_state.target_language = "Telugu"
-
-if "input_text" not in st.session_state:
-    st.session_state.input_text = ""
-
-if "translated_text" not in st.session_state:
-    st.session_state.translated_text = ""
-
-
-# =========================================
-# SWAP LANGUAGES FUNCTION
-# =========================================
-
-def swap_languages():
-
-    current_source = st.session_state.source_language
-    current_target = st.session_state.target_language
-
-    st.session_state.source_language = current_target
-    st.session_state.target_language = current_source
-
-
-# =========================================
-# CLEAR TEXT FUNCTION
-# =========================================
-
-def clear_text():
-
-    st.session_state.input_text = ""
-    st.session_state.translated_text = ""
-
-
-# =========================================
-# TRANSLATION FUNCTION
-# =========================================
-
-def translate_text(text, source_language, target_language):
-
+def translate_text(text: str, source_code: str, target_code: str) -> str:
+    """Translates text using MyMemory Translation API."""
     url = "https://api.mymemory.translated.net/get"
-
     params = {
         "q": text,
-        "langpair": f"{source_language}|{target_language}"
+        "langpair": f"{source_code}|{target_code}"
     }
 
-    response = requests.get(
-        url,
-        params=params,
-        timeout=15
-    )
-
+    response = requests.get(url, params=params, timeout=12)
     response.raise_for_status()
-
     data = response.json()
 
-    # Check API response status
     if data.get("responseStatus") != 200:
-        raise Exception(
-            data.get(
-                "responseDetails",
-                "Translation failed."
-            )
-        )
+        raise Exception(data.get("responseDetails", "Translation service error."))
 
-    # Get main translation
-    translated_text = (
-        data.get("responseData", {})
-        .get("translatedText", "")
-        .strip()
-    )
+    translated = (data.get("responseData", {}) or {}).get("translatedText", "").strip()
 
-    # If main translation is empty,
-    # check other available matches
-    if not translated_text:
-
+    if not translated:
         for match in data.get("matches", []):
-
-            translation = (
-                match.get("translation", "")
-                .strip()
-            )
-
-            if translation:
-
-                translated_text = translation
+            candidate = (match.get("translation", "") or "").strip()
+            if candidate:
+                translated = candidate
                 break
 
-    # If no translation was found
-    if not translated_text:
-
-        raise Exception(
-            "No translation was returned by the translation service."
-        )
-
-    return translated_text
-
-
-# =========================================
-# TITLE
-# =========================================
-
-st.markdown(
-    '<div class="main-title">🌍 AI Language Translation Tool</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="subtitle">'
-    'Translate text quickly between multiple languages'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-
-# =========================================
-# LANGUAGE SELECTION
-# =========================================
-
-st.subheader("🌐 Language Selection")
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    source_language = st.selectbox(
-        "Source Language",
-        list(languages.keys()),
-        key="source_language"
-    )
-
-with col2:
-
-    target_language = st.selectbox(
-        "Target Language",
-        list(languages.keys()),
-        key="target_language"
-    )
-
-
-# =========================================
-# SWAP BUTTON
-# =========================================
-
-st.button(
-    "🔁 Swap Languages",
-    use_container_width=True,
-    on_click=swap_languages
-)
-
-
-# =========================================
-# TEXT INPUT
-# =========================================
-
-st.subheader("📝 Enter Text")
-
-text = st.text_area(
-    "Text to translate",
-    height=160,
-    placeholder="Type your text here...",
-    key="input_text"
-)
-
-
-# =========================================
-# TRANSLATE AND CLEAR BUTTONS
-# =========================================
-
-col3, col4 = st.columns(2)
-
-with col3:
-
-    translate_button = st.button(
-        "🔄 Translate",
-        use_container_width=True
-    )
-
-with col4:
-
-    st.button(
-        "🗑️ Clear",
-        use_container_width=True,
-        on_click=clear_text
-    )
-
-
-# =========================================
-# TRANSLATION PROCESS
-# =========================================
-
-if translate_button:
-
-    # Check for empty text
-    if not text.strip():
-
-        st.warning(
-            "⚠️ Please enter some text to translate."
-        )
-
-    # Check same languages
-    elif source_language == target_language:
-
-        st.warning(
-            "⚠️ Please select different source "
-            "and target languages."
-        )
-
-    # Check 500-byte limit
-    elif len(text.encode("utf-8")) > 500:
-
-        st.warning(
-            "⚠️ Please keep the text within 500 bytes."
-        )
-
-    else:
-
-        source_code = languages[source_language]
-        target_code = languages[target_language]
-
-        try:
-
-            with st.spinner("Translating..."):
-
-                result = translate_text(
-                    text,
-                    source_code,
-                    target_code
-                )
-
-            # Save translation
-            st.session_state.translated_text = result
-
-        except requests.exceptions.RequestException:
-
-            st.error(
-                "❌ Could not connect to the translation service. "
-                "Please check your internet connection and try again."
-            )
-
-        except Exception as error:
-
-            st.error(
-                f"❌ Translation failed: {error}"
-            )
-
-
-# =========================================
-# DISPLAY TRANSLATION
-# =========================================
-
-if st.session_state.translated_text:
-
-    st.subheader("✨ Translation")
-
-    st.text_area(
-        "Translated Text",
-        value=st.session_state.translated_text,
-        height=160,
-        disabled=True
-    )
-
-    # =====================================
-    # COPY TRANSLATION BUTTON
-    # =====================================
-
-    safe_text = (
-        st.session_state.translated_text
-        .replace("\\", "\\\\")
-        .replace("`", "\\`")
-        .replace("${", "\\${")
-    )
-
-    copy_html = f"""
-    <button
-        onclick="copyTranslation()"
-        style="
-            padding: 10px 20px;
-            font-size: 16px;
-            border-radius: 8px;
-            border: 1px solid #cccccc;
-            background-color: white;
-            cursor: pointer;
-        "
-    >
-        📋 Copy Translation
-    </button>
-
-    <script>
-
-    function copyTranslation() {{
-
-        const text = `{safe_text}`;
-
-        navigator.clipboard.writeText(text);
-
-        alert("Translation copied!");
-
-    }}
-
-    </script>
-    """
-
-    components.html(
-        copy_html,
-        height=60
-    )
-
-    st.success(
-        f"✅ Translated from {source_language} "
-        f"to {target_language}."
-    )
-
-
-# =========================================
-# ABOUT PROJECT
-# =========================================
-
-st.markdown("---")
-
-st.subheader("ℹ️ About This Project")
-
-st.write(
-    "AI Language Translation Tool is a web-based application "
-    "that translates text between multiple languages using "
-    "a translation API."
-)
-
-st.write("**Technologies Used:**")
-
-st.markdown(
-    """
-    - Python
-    - Streamlit
-    - REST API
-    - MyMemory Translation API
-    """
-)
-
-st.write("**Features:**")
-
-st.markdown(
-    """
-    - Multiple language support
-    - Real-time translation
-    - Language swapping
-    - Copy translated text
-    - Clear input
-    - Input validation
-    - Error handling
-    """
-)
+    if not translated:
+        raise Exception("No translation was returned by the translation service.")
+
+    return translated
+
+
+# =======================================================
+# FRONTEND ROUTES (Root & Vercel Rewrites)
+# =======================================================
+
+@app.route("/")
+@app.route("/api")
+@app.route("/api/index")
+@app.route("/api/index.py")
+def home():
+    try:
+        return render_template("index.html")
+    except Exception:
+        index_path = os.path.join(base_dir, "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, "r", encoding="utf-8") as f:
+                return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
+        return "AI Language Translation Tool is running", 200
+
+
+# =======================================================
+# API ROUTES
+# =======================================================
+
+@app.route("/api/languages", methods=["GET"])
+def get_languages():
+    return jsonify({
+        "success": True,
+        "languages": LANGUAGES
+    })
+
+
+@app.route("/translate", methods=["POST"])
+@app.route("/api/translate", methods=["POST"])
+@app.route("/api/index/translate", methods=["POST"])
+def handle_translation():
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    source_lang = data.get("source", "en")
+    target_lang = data.get("target", "te")
+
+    # Validation 1: Empty text
+    if not text:
+        return jsonify({
+            "success": False,
+            "error": "Please enter some text to translate."
+        }), 400
+
+    # Validation 2: Same language
+    if source_lang == target_lang:
+        return jsonify({
+            "success": False,
+            "error": "Source and target languages must be different."
+        }), 400
+
+    # Validation 3: Byte size limit
+    if len(text.encode("utf-8")) > 500:
+        return jsonify({
+            "success": False,
+            "error": "Text exceeds the 500-byte free tier limit. Please shorten your text."
+        }), 400
+
+    try:
+        translated_text = translate_text(text, source_lang, target_lang)
+        return jsonify({
+            "success": True,
+            "translated_text": translated_text,
+            "source": source_lang,
+            "target": target_lang
+        })
+    except requests.exceptions.RequestException as req_err:
+        return jsonify({
+            "success": False,
+            "error": "Could not connect to translation service. Please check your internet connection."
+        }), 502
+    except Exception as err:
+        return jsonify({
+            "success": False,
+            "error": str(err)
+        }), 500
+
+
+# Catch-all handler to avoid 404s on Vercel rewritten paths
+@app.route("/<path:path>", methods=["GET", "POST"])
+def catch_all(path):
+    if request.method == "POST":
+        return handle_translation()
+    return home()
+
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
